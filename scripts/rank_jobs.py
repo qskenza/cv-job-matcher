@@ -7,6 +7,7 @@ Usage: python -m scripts.rank_jobs data/output/cv_eng.json [--threshold 0.9] [--
 import argparse
 from pathlib import Path
 
+from matcher import tracing
 from matcher.embeddings import Embedder
 from matcher.ranking import SKILL_MATCH_THRESHOLD, rank_jobs
 from matcher.schemas import CVProfile, JobOffer
@@ -30,7 +31,19 @@ if __name__ == "__main__":
         raise SystemExit("No parsed jobs found. Run: python -m scripts.parse_jobs")
 
     embedder = Embedder()
-    results = rank_jobs(cv, jobs, embedder.embed, args.threshold)
+    try:
+        with tracing.trace_step(
+            "rank-jobs",
+            input={"cv": cv.full_name, "jobs": list(jobs), "threshold": args.threshold},
+        ) as run:
+            results = rank_jobs(cv, jobs, embedder.embed, args.threshold)
+            run.update(output=[
+                {"job": r.job_id, "score": round(r.score, 3), "semantic": round(r.semantic, 3),
+                 "coverage": round(r.coverage, 3), "missing": r.missing}
+                for r in results
+            ])
+    finally:
+        tracing.flush()
 
     print(f"Ranking {len(jobs)} offers for {cv.full_name} "
           f"(backend: {'faiss' if faiss else 'numpy'}, threshold: {args.threshold})\n")

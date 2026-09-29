@@ -5,7 +5,7 @@ Matches CVs (French/English) to job offers using LLM extraction, Pydantic v2 val
 ## Status
 - [x] Step 1: CV parsing → validated Pydantic v2 models (with self-correcting retry)
 - [x] Step 2: Embeddings + ranking (FAISS)
-- [ ] Step 3: Langfuse tracing
+- [X] Step 3: Langfuse tracing
 - [ ] Step 4: Streamlit demo
 
 ## Setup
@@ -40,3 +40,13 @@ pytest
      so a similarity threshold alone cannot separate them.
 - Embeddings are cached on disk, so each text is only sent to the API once
      (the free tier allows 100 embeddings per minute).
+       
+## Tracing (Langfuse)
+
+Every LLM and embedding call is traced in Langfuse: prompt, output, tokens, latency,
+validation retries (flagged as warnings) and cache hits. Tracing is optional:
+without Langfuse keys in `.env`, the code runs exactly the same.
+
+Parsing 3 job offers took 3.5 s and cost $0.0021 (about $0.0007 per offer).
+
+![Langfuse trace](docs/langfuse_trace.png)

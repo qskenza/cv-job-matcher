@@ -13,6 +13,7 @@ from google import genai
 from google.genai import errors, types
 
 from matcher.extractor import make_client
+from matcher.tracing import trace_step
 
 DEFAULT_EMBEDDING_MODEL = "gemini-embedding-001"
 DEFAULT_CACHE = Path("data/output/embedding_cache.json")
@@ -43,33 +44,41 @@ class Embedder:
     def embed(self, texts: list[str]) -> np.ndarray:
         """Returns a (len(texts), dim) float32 array of unit vectors."""
         new = list(dict.fromkeys(t for t in texts if self._key(t) not in self.cache))
-        for i in range(0, len(new), BATCH_SIZE):
-            batch = new[i : i + BATCH_SIZE]
-            for text, vector in zip(batch, self._embed_batch(batch)):
-                self.cache[self._key(text)] = vector
-        if new:
-            self._save()
+        with trace_step(
+            "embed",
+            metadata={"requested": len(texts), "from_cache": len(texts) - len(new), "sent_to_api": len(new)},
+        ):
+            for i in range(0, len(new), BATCH_SIZE):
+                batch = new[i : i + BATCH_SIZE]
+                for text, vector in zip(batch, self._embed_batch(batch)):
+                    self.cache[self._key(text)] = vector
+            if new:
+                self._save()
         vectors = np.array([self.cache[self._key(t)] for t in texts], dtype=np.float32)
         return normalize(vectors)
 
     def _embed_batch(self, batch: list[str]) -> list[list[float]]:
         """Calls the API, waiting and retrying if the rate limit is hit."""
-        for attempt in range(MAX_RETRIES + 1):
-            try:
-                result = self.client.models.embed_content(
-                    model=self.model,
-                    contents=batch,
-                    config=types.EmbedContentConfig(
-                        task_type="SEMANTIC_SIMILARITY",
-                        output_dimensionality=self.dim,
-                    ),
-                )
-                return [e.values for e in result.embeddings]
-            except errors.ClientError as e:
-                if e.code != 429 or attempt == MAX_RETRIES:
-                    raise
-                print(f"Rate limit hit, waiting 60s (retry {attempt + 1}/{MAX_RETRIES})...")
-                time.sleep(60)
+        with trace_step("gemini-embedding", as_type="embedding", model=self.model, input=batch) as obs:
+            for attempt in range(MAX_RETRIES + 1):
+                try:
+                    result = self.client.models.embed_content(
+                        model=self.model,
+                        contents=batch,
+                        config=types.EmbedContentConfig(
+                            task_type="SEMANTIC_SIMILARITY",
+                            output_dimensionality=self.dim,
+                        ),
+                    )
+                    obs.update(output={"vectors": len(result.embeddings), "dimensions": self.dim},
+                               metadata={"attempts": attempt + 1})
+                    return [e.values for e in result.embeddings]
+                except errors.ClientError as e:
+                    if e.code != 429 or attempt == MAX_RETRIES:
+                        raise
+                    obs.update(level="WARNING", status_message="Rate limit hit (429), retried after 60s")
+                    print(f"Rate limit hit, waiting 60s (retry {attempt + 1}/{MAX_RETRIES})...")
+                    time.sleep(60)
 
     def _save(self) -> None:
         if self.cache_path:

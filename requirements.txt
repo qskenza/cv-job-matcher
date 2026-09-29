@@ -5,3 +5,4 @@ python-dotenv>=1.0
 pytest>=8.0
 numpy>=1.26
 faiss-cpu>=1.8
+langfuse>=3.0

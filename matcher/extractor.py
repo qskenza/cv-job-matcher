@@ -8,6 +8,7 @@ from google.genai import types
 from pydantic import BaseModel, ValidationError
 
 from matcher.schemas import CVProfile, JobOffer
+from matcher.tracing import trace_step
 
 load_dotenv()
 
@@ -58,6 +59,19 @@ def make_client() -> genai.Client:
     return genai.Client(api_key=api_key)
 
 
+def _usage(response) -> dict[str, int]:
+    """Token counts in Langfuse's format (each token counted in exactly one bucket)."""
+    meta = response.usage_metadata
+    if meta is None:
+        return {}
+    usage = {
+        "input": meta.prompt_token_count,
+        "output": meta.candidates_token_count,
+        "output_reasoning": getattr(meta, "thoughts_token_count", None),
+    }
+    return {k: v for k, v in usage.items() if v}
+
+
 class Extractor:
     """Extracts validated Pydantic models from raw text using Gemini."""
 
@@ -65,38 +79,57 @@ class Extractor:
         self.client = client or make_client()
         self.model = model or os.getenv("GEMINI_MODEL", DEFAULT_MODEL)
 
-    def _call(self, contents: str, schema: type[BaseModel]) -> str:
-        response = self.client.models.generate_content(
+    def _call(self, contents: str, schema: type[BaseModel], attempt: int) -> str:
+        """Sends one request, traced as an LLM generation (input, output, tokens, time)."""
+        with trace_step(
+            f"gemini-{schema.__name__}",
+            as_type="generation",
             model=self.model,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=schema,
-                temperature=0,
-                automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-            ),
-        )
-        if not response.text:
-            raise RuntimeError("The model returned an empty response.")
-        return response.text
+            input=contents,
+            model_parameters={"temperature": 0},
+            metadata={"attempt": attempt + 1},
+        ) as generation:
+            response = self.client.models.generate_content(
+                model=self.model,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=schema,
+                    temperature=0,
+                    automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+                ),
+            )
+            if not response.text:
+                raise RuntimeError("The model returned an empty response.")
+            generation.update(output=response.text, usage_details=_usage(response))
+            return response.text
 
     def extract(self, prompt: str, text: str, schema: type[T], max_retries: int = 1) -> T:
         """Extracts and validates text into `schema`.
 
         If validation fails, the errors are sent back to the model so it can
-        correct its output, up to `max_retries` times.
+        correct its output, up to `max_retries` times. Failed attempts are
+        flagged as warnings in the trace.
         """
         base_prompt = prompt + text
         contents = base_prompt
 
-        for attempt in range(max_retries + 1):
-            raw = self._call(contents, schema)
-            try:
-                return schema.model_validate_json(raw)
-            except ValidationError as e:
-                if attempt == max_retries:
-                    raise
-                contents = base_prompt + RETRY_PROMPT.format(errors=e)
+        with trace_step(f"extract-{schema.__name__}", input={"characters": len(text)}) as span:
+            for attempt in range(max_retries + 1):
+                raw = self._call(contents, schema, attempt)
+                try:
+                    result = schema.model_validate_json(raw)
+                    span.update(output=result.model_dump(), metadata={"attempts": attempt + 1})
+                    return result
+                except ValidationError as e:
+                    span.update(
+                        level="WARNING",
+                        status_message=f"Attempt {attempt + 1} failed validation "
+                        f"({e.error_count()} errors)",
+                    )
+                    if attempt == max_retries:
+                        raise
+                    contents = base_prompt + RETRY_PROMPT.format(errors=e)
 
     def extract_cv(self, cv_text: str) -> CVProfile:
         return self.extract(CV_PROMPT, cv_text, CVProfile)

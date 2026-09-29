@@ -2,12 +2,17 @@
 import sys
 from pathlib import Path
 
+from matcher import tracing
 from matcher.extractor import Extractor
 from matcher.pdf_reader import read_pdf_text
 
 if __name__ == "__main__":
     pdf = Path(sys.argv[1])
-    profile = Extractor().extract_cv(read_pdf_text(pdf))
+    try:
+        with tracing.trace_step("parse-cv", input={"file": pdf.name}):
+            profile = Extractor().extract_cv(read_pdf_text(pdf))
+    finally:
+        tracing.flush()
 
     out_dir = Path("data/output")
     out_dir.mkdir(parents=True, exist_ok=True)
