@@ -6,7 +6,7 @@ Matches CVs (French/English) to job offers using LLM extraction, Pydantic v2 val
 - [x] Step 1: CV parsing → validated Pydantic v2 models (with self-correcting retry)
 - [x] Step 2: Embeddings + ranking (FAISS)
 - [X] Step 3: Langfuse tracing
-- [ ] Step 4: Streamlit demo
+- [X] Step 4: Streamlit demo
 
 ## Setup
 ```bash
