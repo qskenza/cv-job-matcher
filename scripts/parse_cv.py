@@ -2,12 +2,12 @@
 import sys
 from pathlib import Path
 
-from matcher.extractor import CVExtractor
+from matcher.extractor import Extractor
 from matcher.pdf_reader import read_pdf_text
 
 if __name__ == "__main__":
     pdf = Path(sys.argv[1])
-    profile = CVExtractor().extract(read_pdf_text(pdf))
+    profile = Extractor().extract_cv(read_pdf_text(pdf))
 
     out_dir = Path("data/output")
     out_dir.mkdir(parents=True, exist_ok=True)
