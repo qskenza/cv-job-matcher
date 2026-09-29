@@ -50,3 +50,15 @@ without Langfuse keys in `.env`, the code runs exactly the same.
 Parsing 3 job offers took 3.5 s and cost $0.0021 (about $0.0007 per offer).
 
 ![Langfuse trace](docs/langfuse_trace.png)
+
+   ## Demo
+```bash
+   streamlit run app.py
+```
+   Upload a CV (PDF, French or English) or pick one already parsed, and see the offers
+   ranked with matched and missing skills. The threshold can be adjusted in the sidebar.
+
+   ![App screenshot](docs/app_screenshot.png)
+
+   The French CV gives the same Jobzyn score (68%) as the English one: normalization to English
+   makes the matching language-independent.
